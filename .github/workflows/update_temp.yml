@@ -1,0 +1,77 @@
+name: Update Temperature from IoT Photo
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_url:
+        description: 'Temporary URL or base64 of image'
+        required: true
+        type: string
+
+jobs:
+  process-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install google-genai requests
+
+      - name: Run AI Extraction Script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          IMAGE_URL: ${{ inputs.image_url }}
+        run: |
+          python -c "
+          import os, json, datetime
+          from google import genai
+          from google.genai import types
+          import requests
+
+          client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
+          
+          # Download image sent by IoT device
+          img_data = requests.get(os.environ['IMAGE_URL']).content
+          
+          # Ask Gemini to read the 7-segment display
+          response = client.models.generate_content(
+              model='gemini-2.5-flash',
+              contents=[
+                  types.Part.from_bytes(data=img_data, mime_type='image/jpeg'),
+                  'Read the temperature shown on this 7-segment display. Return ONLY the numerical value in format xx.x with no extra text.'
+              ]
+          )
+          
+          temp_value = response.text.strip()
+          current_time = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+          
+          # Load existing JSON
+          try:
+              with open('readings.json', 'r') as f:
+                  data = json.load(f)
+          except:
+              data = []
+              
+          # Append new reading and keep only the last 5
+          data.insert(0, {'time': current_time, 'temp': temp_value})
+          data = data[:5]
+          
+          with open('readings.json', 'w') as f:
+              json.dump(data, f, indent=2)
+          "
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add readings.json
+          git commit -m "Update temperature reading via AI" || exit 0
+          git push
